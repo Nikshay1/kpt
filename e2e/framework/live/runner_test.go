@@ -28,10 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func ptr(s string) *string {
-	return &s
-}
-
 func TestCheckStep(t *testing.T) {
 	files := map[string]string{
 		"resourcegroup.yaml": "kind: ResourceGroup\nname: inventory-1\n",
@@ -61,17 +57,17 @@ func TestCheckStep(t *testing.T) {
 			expectedFailures: []string{"expected exit code 1, but got 0"},
 		},
 		"exact output": {
-			step:   Step{StdOut: ptr("out\n"), StdErr: ptr("err\n")},
+			step:   Step{StdOut: new("out\n"), StdErr: new("err\n")},
 			stdout: "out\n",
 			stderr: "err\n",
 		},
 		"exact output differs": {
-			step:             Step{StdErr: ptr("other\n")},
+			step:             Step{StdErr: new("other\n")},
 			stderr:           "err\n",
 			expectedFailures: []string{"expected stderr:\nother\nbut got:\nerr"},
 		},
 		"empty output expected": {
-			step:             Step{StdOut: ptr(""), StdErr: ptr("")},
+			step:             Step{StdOut: new(""), StdErr: new("")},
 			stderr:           "err",
 			expectedFailures: []string{"expected stderr:\n\nbut got:\nerr"},
 		},
