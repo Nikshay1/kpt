@@ -1,4 +1,4 @@
-# Copyright 2021 The kpt Authors
+# Copyright 2021-2026 The kpt Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,13 @@ kptArgs:
   - "--install-resource-group"
 stdErr: |
   installing inventory ResourceGroup CRD.
-  Dry-run strategy: server
-  deployment.apps/nginx-deployment created
-  1 resource(s) applied. 1 created, 0 unchanged, 0 configured, 0 failed
+  Dry-run strategy: client
+  inventory update started
+  inventory update finished
+  apply phase started
+  deployment.apps/nginx-deployment apply successful
+  apply phase finished
+  inventory update started
+  inventory update finished
+  apply result: 1 attempted, 1 successful, 0 skipped, 0 failed
 exitCode: 0

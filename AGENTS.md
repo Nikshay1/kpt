@@ -152,7 +152,7 @@ git config --global user.name "Your Name"
   * Runs `./e2e/live/end-to-end-test.sh -k <K8S_VERSION>`
 * **.github/workflows/live-e2e.yml**: Live apply e2e tests
   * Tests with pinned Kubernetes image SHAs
-  * Runs `make test-live-apply` with `K8S_VERSION` environment variable
+  * Runs `make test-live` (`TestLiveApply` and `TestLiveScenarios`) with `K8S_VERSION` environment variable
 * **.github/workflows/release-api.yml**: Release the kpt API module
   * Builds, tests and lints the kpt API module
   * Runs `make api`

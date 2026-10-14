@@ -1,4 +1,4 @@
-// Copyright 2021,2026 The kpt Authors
+// Copyright 2021-2026 The kpt Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package live
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -27,12 +28,25 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"sigs.k8s.io/cli-utils/pkg/kstatus/status"
 	"sigs.k8s.io/cli-utils/pkg/testutil"
+	"sigs.k8s.io/kustomize/kyaml/copyutil"
+	"sigs.k8s.io/kustomize/kyaml/filesys"
 	"sigs.k8s.io/kustomize/kyaml/yaml"
 )
+
+// commandTimeout is how long a kpt command may run. It is longer than the
+// largest --reconcile-timeout used by a test case (10m) and shorter than the
+// -timeout of the make targets (20m).
+const commandTimeout = 15 * time.Minute
+
+// ExecFunc runs a command in dir. The returned error is nil or an
+// *exec.ExitError if the command ran, and any other error if it could not
+// be run.
+type ExecFunc func(ctx context.Context, dir, name string, args ...string) (stdout, stderr string, err error)
 
 // Runner uses the provided Config to run a test.
 type Runner struct {
@@ -42,20 +56,48 @@ type Runner struct {
 
 	// Path provides the path to the test files.
 	Path string
+
+	// Exec runs the kpt commands. Default: run them with os/exec.
+	Exec ExecFunc
+
+	// workDir is the copy of Path that the kpt commands run in.
+	workDir string
+
+	// timeout overrides commandTimeout in unit tests.
+	timeout time.Duration
 }
 
 // Run executes the test.
 func (r *Runner) Run(t *testing.T) {
 	testName := filepath.Base(r.Path)
+	r.copyToWorkDir(t)
 	r.RunPreApply(t)
 
-	stdout, stderr, err := r.RunApply(t)
-	r.VerifyExitCode(t, err)
+	if len(r.Config.Steps) != 0 {
+		r.runSteps(t)
+		return
+	}
+
+	stdout, stderr, exitCode := r.RunApply(t)
+	r.VerifyExitCode(t, exitCode)
 	r.VerifyStdout(t, stdout)
 	r.VerifyStderr(t, stderr)
 	if len(r.Config.Inventory) != 0 {
 		r.VerifyInventory(t, testName, testName)
 	}
+}
+
+// copyToWorkDir copies the test files to a temporary directory, so the kpt
+// commands can change the package without changing the test files.
+func (r *Runner) copyToWorkDir(t *testing.T) {
+	r.workDir = filepath.Join(t.TempDir(), filepath.Base(r.Path))
+	if err := copyutil.CopyDir(filesys.MakeFsOnDisk(), r.Path, r.workDir); err != nil {
+		t.Fatalf("error copying %s to %s: %v", r.Path, r.workDir, err)
+	}
+}
+
+func (r *Runner) packageDir() string {
+	return filepath.Join(r.workDir, "resources")
 }
 
 func (r *Runner) RunPreApply(t *testing.T) {
@@ -74,10 +116,45 @@ func (r *Runner) RunPreApply(t *testing.T) {
 	}
 }
 
-func (r *Runner) RunApply(t *testing.T) (string, string, error) {
+func (r *Runner) RunApply(t *testing.T) (string, string, int) {
 	t.Logf("Running command: kpt %s", strings.Join(r.Config.KptArgs, " "))
-	cmd := exec.Command("kpt", r.Config.KptArgs...)
-	cmd.Dir = filepath.Join(r.Path, "resources")
+	stdout, stderr, exitCode, err := r.runKpt(r.Config.KptArgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stdout, stderr, exitCode
+}
+
+// runKpt runs kpt with args in the package. It returns an error if kpt
+// could not be run or did not finish in time.
+func (r *Runner) runKpt(args []string) (string, string, int, error) {
+	timeout := r.timeout
+	if timeout == 0 {
+		timeout = commandTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	run := r.Exec
+	if run == nil {
+		run = execCommand
+	}
+	stdout, stderr, err := run(ctx, r.packageDir(), "kpt", args...)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return stdout, stderr, 0, fmt.Errorf("kpt %s did not finish within %s", strings.Join(args, " "), timeout)
+	}
+	if err == nil {
+		return stdout, stderr, 0, nil
+	}
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+		return stdout, stderr, exitErr.ExitCode(), nil
+	}
+	return stdout, stderr, 0, fmt.Errorf("error running kpt %s: %w", strings.Join(args, " "), err)
+}
+
+func execCommand(ctx context.Context, dir, name string, args ...string) (string, string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
 
 	var outBuf bytes.Buffer
 	var errBuf bytes.Buffer
@@ -88,11 +165,82 @@ func (r *Runner) RunApply(t *testing.T) (string, string, error) {
 	return outBuf.String(), errBuf.String(), err
 }
 
-func (r *Runner) VerifyExitCode(t *testing.T, err error) {
-	exitCode := 0
-	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
-		exitCode = exitErr.ExitCode()
+// runSteps runs the steps of the test case one after the other. It stops
+// at the first step that fails.
+func (r *Runner) runSteps(t *testing.T) {
+	normalize := func(text string) string {
+		return r.prepOutput(t, text)
 	}
+	readFile := func(path string) ([]byte, error) {
+		return os.ReadFile(filepath.Join(r.packageDir(), path))
+	}
+	for i, step := range r.Config.Steps {
+		t.Logf("Step %d: kpt %s", i+1, strings.Join(step.KptArgs, " "))
+		stdout, stderr, exitCode, err := r.runKpt(step.KptArgs)
+		if err != nil {
+			t.Fatalf("step %d: %v", i+1, err)
+		}
+		failures := checkStep(step, stdout, stderr, exitCode, normalize, readFile)
+		if len(failures) == 0 {
+			continue
+		}
+		for _, failure := range failures {
+			t.Errorf("step %d: %s", i+1, failure)
+		}
+		t.Logf("step %d stdout:\n%s", i+1, stdout)
+		t.Logf("step %d stderr:\n%s", i+1, stderr)
+		t.FailNow()
+	}
+}
+
+// checkStep returns a description of every expectation of the step that
+// the command result does not meet.
+func checkStep(step Step, stdout, stderr string, exitCode int,
+	normalize func(string) string, readFile func(string) ([]byte, error)) []string {
+	var failures []string
+	if step.ExitCode != exitCode {
+		failures = append(failures, fmt.Sprintf("expected exit code %d, but got %d", step.ExitCode, exitCode))
+	}
+	failures = append(failures, checkOutput("stdout", normalize(stdout),
+		step.StdOut, step.StdOutContains, step.StdOutNotContains)...)
+	failures = append(failures, checkOutput("stderr", normalize(stderr),
+		step.StdErr, step.StdErrContains, step.StdErrNotContains)...)
+	for _, file := range step.Files {
+		b, err := readFile(file.Path)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("error reading file %s: %v", file.Path, err))
+			continue
+		}
+		failures = append(failures, checkText("file "+file.Path, string(b), file.Contains, file.NotContains)...)
+	}
+	return failures
+}
+
+func checkOutput(name, output string, expected *string, contains, notContains []string) []string {
+	var failures []string
+	if expected != nil && strings.TrimSpace(*expected) != output {
+		failures = append(failures, fmt.Sprintf("expected %s:\n%s\nbut got:\n%s",
+			name, strings.TrimSpace(*expected), output))
+	}
+	return append(failures, checkText(name, output, contains, notContains)...)
+}
+
+func checkText(name, text string, contains, notContains []string) []string {
+	var failures []string
+	for _, s := range contains {
+		if !strings.Contains(text, s) {
+			failures = append(failures, fmt.Sprintf("%s does not contain %q", name, s))
+		}
+	}
+	for _, s := range notContains {
+		if strings.Contains(text, s) {
+			failures = append(failures, fmt.Sprintf("%s contains %q", name, s))
+		}
+	}
+	return failures
+}
+
+func (r *Runner) VerifyExitCode(t *testing.T, exitCode int) {
 	if want, got := r.Config.ExitCode, exitCode; want != got {
 		t.Errorf("expected exit code %d, but got %d", want, got)
 	}

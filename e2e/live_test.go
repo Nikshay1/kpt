@@ -18,8 +18,11 @@
 package e2e
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 
 	livetest "github.com/kptdev/kpt/e2e/framework/live"
@@ -34,44 +37,74 @@ func TestLivePlan(t *testing.T) {
 	runTests(t, filepath.Join(".", "testdata", "live-plan"))
 }
 
+func TestLiveScenarios(t *testing.T) {
+	runTests(t, filepath.Join(".", "testdata", "live-scenarios"))
+}
+
+var (
+	clusterOnce  sync.Once
+	clusterReady bool
+)
+
+// ensureCluster creates a new kind cluster the first time it is called in
+// the test binary. The cluster is not removed after the tests.
+func ensureCluster(t *testing.T) {
+	clusterOnce.Do(func() {
+		livetest.RemoveKindCluster(t)
+		livetest.CreateKindCluster(t)
+		clusterReady = true
+	})
+	if !clusterReady {
+		t.Fatal("the kind cluster could not be created")
+	}
+}
+
 func runTests(t *testing.T, path string) {
 	testCases := scanTestCases(t, path)
+	ensureCluster(t)
+	paths := slices.Sorted(maps.Keys(testCases))
 
-	livetest.RemoveKindCluster(t)
-	livetest.CreateKindCluster(t)
+	// Test cases that can not run in parallel run first, one at a time,
+	// because they may remove the ResourceGroup CRD.
+	for _, p := range paths {
+		if c := testCases[p]; !c.Parallel {
+			runTestCase(t, p, c)
+		}
+	}
 
-	for p := range testCases {
-		p := p
-		c := testCases[p]
+	// Parallel test cases only start after this function has returned, so
+	// the ResourceGroup CRD is installed once for all of them here.
+	livetest.InstallResourceGroup(t)
+	for _, p := range paths {
+		if c := testCases[p]; c.Parallel {
+			runTestCase(t, p, c)
+		}
+	}
+}
 
-		if !c.Parallel {
-			continue
+func runTestCase(t *testing.T, p string, c livetest.TestCaseConfig) {
+	t.Run(p, func(t *testing.T) {
+		switch {
+		case c.Parallel:
+			require.False(t, c.NoResourceGroup, "Parallel tests can not modify the RG CRD")
+			t.Parallel()
+		case c.NoResourceGroup:
+			if livetest.CheckIfResourceGroupInstalled(t) {
+				livetest.RemoveResourceGroup(t)
+			}
+		default:
+			livetest.InstallResourceGroup(t)
 		}
 
-		t.Run(p, func(t *testing.T) {
-			if c.Parallel {
-				t.Parallel()
-			}
+		ns := filepath.Base(p)
+		livetest.CreateNamespace(t, ns)
+		defer livetest.RemoveNamespace(t, ns)
 
-			if c.NoResourceGroup {
-				require.False(t, c.Parallel, "Parallel tests can not modify the RG CRD")
-				if livetest.CheckIfResourceGroupInstalled(t) {
-					livetest.RemoveResourceGroup(t)
-				}
-			} else {
-				livetest.InstallResourceGroup(t)
-			}
-
-			ns := filepath.Base(p)
-			livetest.CreateNamespace(t, ns)
-			defer livetest.RemoveNamespace(t, ns)
-
-			(&livetest.Runner{
-				Config: c,
-				Path:   p,
-			}).Run(t)
-		})
-	}
+		(&livetest.Runner{
+			Config: c,
+			Path:   p,
+		}).Run(t)
+	})
 }
 
 func scanTestCases(t *testing.T, path string) map[string]livetest.TestCaseConfig {
