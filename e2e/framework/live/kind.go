@@ -1,4 +1,4 @@
-// Copyright 2021 The kpt Authors
+// Copyright 2021-2026 The kpt Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -44,16 +45,37 @@ func RemoveResourceGroup(t *testing.T) {
 	if CheckIfResourceGroupInstalled(t) {
 		t.Fatalf("couldn't remove ResourceGroup CRD")
 	}
+
+	// kubectl and kpt cache the API discovery on disk for hours, so they
+	// would still find the ResourceGroup type. kubectl api-resources
+	// refreshes the cache. Wait until the type is gone from it.
+	deadline := time.Now().Add(time.Minute)
+	for {
+		cmd := exec.Command("kubectl", "api-resources", "--api-group=kpt.dev", "-o", "name")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("error refreshing the API discovery cache: %v\n%s", err, out)
+		}
+		if !strings.Contains(string(out), "resourcegroups.kpt.dev") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the ResourceGroup type is still served after the CRD was removed")
+		}
+		time.Sleep(time.Second)
+	}
 }
 
+// CheckIfResourceGroupInstalled checks for the ResourceGroup CRD object, so
+// the result does not depend on the API discovery cache.
 func CheckIfResourceGroupInstalled(t *testing.T) bool {
-	cmd := exec.Command("kubectl", "get", "resourcegroups.kpt.dev")
+	cmd := exec.Command("kubectl", "get", "crd", "resourcegroups.kpt.dev")
 	output, err := cmd.CombinedOutput()
-	if strings.Contains(string(output), "the server doesn't have a resource type") {
+	if strings.Contains(string(output), "NotFound") {
 		return false
 	}
 	if err != nil {
-		t.Fatalf("error checking for ResourceGroup CRD: %v", err)
+		t.Fatalf("error checking for ResourceGroup CRD: %v\n%s", err, output)
 	}
 	return true
 }
@@ -78,7 +100,7 @@ func CheckKindClusterAvailable(t *testing.T) bool {
 }
 
 func CreateKindCluster(t *testing.T) {
-	args := []string{"create", "cluster", fmt.Sprintf("--name=%s", KindClusterName)}
+	args := []string{"create", "cluster", fmt.Sprintf("--name=%s", KindClusterName), "--wait=2m"}
 	if k8sVersion := os.Getenv(K8sVersionEnvName); k8sVersion != "" {
 		t.Logf("Using version %s", k8sVersion)
 		args = append(args, fmt.Sprintf("--image=kindest/node:v%s", k8sVersion))

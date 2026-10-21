@@ -1,0 +1,70 @@
+# Copyright 2026 The kpt Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# kpt live init writes the inventory to resourcegroup.yaml, and not to the
+# Kptfile. A second init fails unless --force is used.
+parallel: true
+
+steps:
+  - kptArgs:
+      - "live"
+      - "init"
+    stdOut: ""
+    stdErr: |
+      initializing "resourcegroup.yaml" data (namespace: init)...success
+    files:
+      - path: Kptfile
+        notContains:
+          - "inventory:"
+      - path: resourcegroup.yaml
+        contains:
+          - "kind: ResourceGroup"
+          - "namespace: init"
+          - "cli-utils.sigs.k8s.io/inventory-id: "
+
+  - kptArgs:
+      - "live"
+      - "init"
+    exitCode: 1
+    stdOut: ""
+    stdErr: |
+      initializing "resourcegroup.yaml" data (namespace: init)...failed
+
+      Error: Inventory information has already been added to the package ResourceGroup object. Changing it after a package has been applied to the cluster can lead to undesired results. Use the --force flag to suppress this error.
+
+  - kptArgs:
+      - "live"
+      - "init"
+      - "--force"
+      - "--name=inventory-18030002"
+    stdOut: ""
+    stdErr: |
+      initializing "resourcegroup.yaml" data (namespace: init)...success
+    files:
+      - path: resourcegroup.yaml
+        contains:
+          - "name: inventory-18030002"
+
+  - kptArgs:
+      - "live"
+      - "init"
+      - "--quiet"
+      - "--force"
+      - "--name=inventory-quiet"
+    stdOut: ""
+    stdErr: ""
+    files:
+      - path: resourcegroup.yaml
+        contains:
+          - "name: inventory-quiet"

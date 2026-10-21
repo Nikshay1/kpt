@@ -1,4 +1,4 @@
-# Copyright 2021, 2026 The kpt Authors
+# Copyright 2021-2026 The kpt Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -44,10 +44,15 @@ jobs:
               - 'commands/pkg/**'
               - 'e2e/framework/**'
               - 'e2e/live/**'
+              - 'e2e/live_test.go'
+              - 'e2e/testdata/live-apply/**'
+              - 'e2e/testdata/live-scenarios/**'
               - 'pkg/**'
               - 'go.mod'
               - 'go.sum'
               - '.github/workflows/live-e2e.yml'
+              - 'Makefile'
+              - 'make/**'
 
   live-apply:
     name: live-apply-k8s${{ matrix.k8s }}
@@ -78,7 +83,7 @@ jobs:
         env:
           K8S_VERSION: ${{ matrix.version }}
         run: |
-          K8S_VERSION=$K8S_VERSION make test-live-apply
+          K8S_VERSION=$K8S_VERSION make test-live
 
   live-apply-gate:
     name: live-apply

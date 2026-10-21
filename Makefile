@@ -1,4 +1,4 @@
-# Copyright 2019,2026 The kpt Authors
+# Copyright 2019-2026 The kpt Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ install-mdrip:
 
 .PHONY: install-kind
 install-kind:
-	go install sigs.k8s.io/kind@v0.29.0
+	go install sigs.k8s.io/kind@v0.32.0
 
 .PHONY: install-golangci-lint
 install-golangci-lint:
@@ -100,6 +100,10 @@ test-fn-eval: build
 # target to run e2e tests for "kpt live apply" command
 test-live-apply: build
 	PATH="$(GOBIN):$(PATH)" go test -v ${LDFLAGS} -timeout=20m --tags=kind -p 2 --run=TestLiveApply/testdata/live-apply/$(T)  ./e2e/
+
+# target to run all e2e tests for the "kpt live" commands
+test-live: build
+	PATH="$(GOBIN):$(PATH)" go test -v ${LDFLAGS} -timeout=20m --tags=kind -p 2 --run='^(TestLiveApply|TestLiveScenarios)$$'  ./e2e/
 
 vet: vet-api
 	go vet ./...
