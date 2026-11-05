@@ -1,0 +1,25 @@
+name: zz-repro-4848
+on:
+  push:
+    branches: [zz-review-4848]
+jobs:
+  as-is:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go test ./pkg/fn/runtime/ -run "TestZZ|TestRunCmd" -v -count=1 -timeout 5m
+  with-synchronize:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - shell: bash
+        run: sed -i 's/windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE,/windows.SYNCHRONIZE|windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE,/' pkg/fn/runtime/exec_windows.go && git diff --stat
+      - run: go test ./pkg/fn/runtime/ -run "TestZZ|TestRunCmd" -v -count=1 -timeout 5m
