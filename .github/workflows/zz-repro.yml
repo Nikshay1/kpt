@@ -1,5 +1,7 @@
 name: zz-repro-4848
 on:
+  pull_request:
+  workflow_dispatch:
   push:
     branches: [zz-review-4848]
 jobs:
